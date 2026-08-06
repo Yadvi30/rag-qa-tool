@@ -1,0 +1,15 @@
+# Python
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/chroma_db/
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/.env
+
+
+# OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
