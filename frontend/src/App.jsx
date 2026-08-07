@@ -1,8 +1,7 @@
 import { useState } from 'react'
 
-// Day 1 scope: upload PDFs, then search them and see the raw retrieved
-// chunks. On Day 3, the "matches" section becomes an LLM-generated answer
-// instead of raw chunks - the query stays the same, only rendering changes.
+// /ask   -> LLM-generated answer, grounded in retrieved chunks, with citations
+// /query -> raw retrieved chunks only (kept around for debugging retrieval quality)
 
 const API_BASE = 'http://localhost:8000'
 
@@ -12,8 +11,10 @@ function App() {
   const [docs, setDocs] = useState([])
 
   const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState(null)
   const [matches, setMatches] = useState([])
   const [loading, setLoading] = useState(false)
+  const [debugMode, setDebugMode] = useState(false)
 
   const [error, setError] = useState('')
 
@@ -37,20 +38,29 @@ function App() {
     }
   }
 
-  const handleQuery = async () => {
+  const handleAsk = async () => {
     if (!question.trim()) return
     setLoading(true)
     setError('')
+    setAnswer(null)
+    setMatches([])
+
+    const endpoint = debugMode ? '/query' : '/ask'
 
     try {
-      const res = await fetch(`${API_BASE}/query`, {
+      const res = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Query failed')
-      setMatches(data.matches)
+      if (!res.ok) throw new Error(data.detail || 'Request failed')
+
+      if (debugMode) {
+        setMatches(data.matches)
+      } else {
+        setAnswer(data)
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -62,7 +72,7 @@ function App() {
     <div className="container">
       <h1>RAG Q&amp;A Tool</h1>
       <p className="subtitle">
-        Day 1 build: upload → extract → chunk → embed → retrieve (LLM answer wiring comes Day 3)
+        Upload PDFs, ask questions, get answers grounded in your documents with citations.
       </p>
 
       <section className="card">
@@ -96,19 +106,42 @@ function App() {
             value={question}
             placeholder="Ask something about your uploaded documents..."
             onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleQuery()}
+            onKeyDown={(e) => e.key === 'Enter' && handleAsk()}
           />
-          <button onClick={handleQuery} disabled={loading}>
-            {loading ? 'Searching...' : 'Search'}
+          <button onClick={handleAsk} disabled={loading}>
+            {loading ? 'Thinking...' : 'Ask'}
           </button>
         </div>
+        <label className="debug-toggle">
+          <input
+            type="checkbox"
+            checked={debugMode}
+            onChange={(e) => setDebugMode(e.target.checked)}
+          />
+          Debug mode (show raw retrieved chunks instead of a generated answer)
+        </label>
       </section>
 
       {error && <p className="error">{error}</p>}
 
+      {answer && (
+        <section className="card">
+          <h2>Answer</h2>
+          <p className="answer-text">{answer.answer}</p>
+          <div className="sources">
+            <p className="meta">Sources:</p>
+            {answer.sources.map((s, i) => (
+              <span key={i} className="source-chip">
+                {s.source} · p.{s.page}
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
       {matches.length > 0 && (
         <section className="card">
-          <h2>Retrieved chunks</h2>
+          <h2>Retrieved chunks (debug)</h2>
           {matches.map((m, i) => (
             <div key={i} className="match">
               <p className="meta">

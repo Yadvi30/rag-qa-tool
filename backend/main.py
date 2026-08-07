@@ -4,14 +4,19 @@ RAG Q&A Tool - Backend (Day 1 scope)
 Pipeline implemented today:
   upload PDF -> extract text -> chunk -> embed -> store in ChromaDB -> retrieve
 
-NOT implemented yet (Day 3, on purpose):
-  - Calling an LLM to generate a final answer from retrieved chunks
-  - Auth / per-user history (Day 7-8)
+
 
 Run:
   pip install -r requirements.txt
   uvicorn main:app --reload --port 8000
 """
+
+import os
+# ... existing imports stay, plus:
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+
+load_dotenv()
 
 import uuid
 from pathlib import Path
@@ -39,8 +44,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Local, free embedding model -> no API key needed to get today's pipeline working.
-# (When you wire the LLM on Day 3, that's where an API key first becomes necessary.)
+
+
 print("Loading embedding model (first run downloads ~90MB, be patient)...")
 embedding_function = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2",
@@ -57,12 +62,39 @@ vectorstore = Chroma(
 # numbers on Day 6 and note what changes about retrieval quality.
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=400,
-    chunk_overlap=80,
+    chunk_overlap=100,
     separators=["\n\n", "\n", ". ", " ", ""],
 )
 # Simple in-memory registry of what's been uploaded (swap for a SQL table on Day 8)
 uploaded_docs: list[dict] = []
 
+groq_api_key = os.getenv("GROQ_API_KEY")
+if not groq_api_key:
+    print("WARNING: GROQ_API_KEY not set in .env - /ask will fail until it's added.")
+
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0,
+    api_key=groq_api_key,
+)
+
+ANSWER_PROMPT = """You are answering questions using ONLY the context below, taken from \
+the user's uploaded documents. Follow these rules strictly:
+
+1. Answer only using the context provided below. Do not use outside knowledge.
+2. If the context does not contain enough information to answer, say exactly: \
+"I don't have information about this in the uploaded documents." Do not guess or \
+make up an answer.
+3. Keep the answer concise and directly address the question.
+4. Do not mention "the context" or "the provided text" in your answer - answer \
+naturally, as if you already knew this.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
 
 class QueryRequest(BaseModel):
     question: str
@@ -74,15 +106,34 @@ def health():
     return {"status": "ok", "documents_uploaded": len(uploaded_docs)}
 
 
-@app.get("/documents")
-def list_documents():
-    return {"documents": uploaded_docs}
+@app.delete("/reset")
+def reset_database():
+    """
+    Dev utility: wipes everything from the vector store and the upload
+    registry. Use this between test runs instead of manually stopping the
+    server and deleting the chroma_db folder.
+    """
+    global uploaded_docs
+    existing = vectorstore.get()
+    ids = existing.get("ids", [])
+    if ids:
+        vectorstore.delete(ids=ids)
+    uploaded_docs = []
+    return {"status": "reset", "documents_uploaded": 0}
 
 
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     if file.content_type != "application/pdf":
         raise HTTPException(400, "Only PDF files are supported right now.")
+
+    if any(d["filename"] == file.filename for d in uploaded_docs):
+        raise HTTPException(
+            400,
+            f"'{file.filename}' is already uploaded. Call DELETE /reset first if "
+            "you want to re-upload it (re-uploading without resetting creates "
+            "duplicate chunks and skews retrieval results).",
+        )
 
     doc_id = str(uuid.uuid4())[:8]
     save_path = UPLOAD_DIR / f"{doc_id}_{file.filename}"
@@ -98,7 +149,7 @@ async def upload_document(file: UploadFile = File(...)):
         raise HTTPException(400, "Could not extract any text from this PDF.")
 
     # Tag every chunk with where it came from - this is what makes
-    # citations possible later (Day 5).
+
     for chunk in chunks:
         chunk.metadata["source"] = file.filename
         chunk.metadata["doc_id"] = doc_id
@@ -120,9 +171,7 @@ def query_documents(req: QueryRequest):
     if not uploaded_docs:
         raise HTTPException(400, "Upload at least one document before querying.")
 
-    # Today: return the raw retrieved chunks so you can manually judge
-    # retrieval quality (this is the "test retrieval manually" step).
-    # Day 3: these chunks become the context for an LLM prompt instead.
+   
     results = vectorstore.similarity_search_with_score(req.question, k=req.top_k)
 
     matches = [
@@ -136,3 +185,38 @@ def query_documents(req: QueryRequest):
     ]
 
     return {"question": req.question, "matches": matches}
+
+@app.post("/ask")
+def ask_question(req: QueryRequest):
+    if not uploaded_docs:
+        raise HTTPException(400, "Upload at least one document before asking questions.")
+
+    results = vectorstore.similarity_search_with_score(req.question, k=req.top_k)
+    if not results:
+        raise HTTPException(400, "No relevant content found for this question.")
+
+    context_blocks = []
+    sources = []
+    for doc, score in results:
+        source = doc.metadata.get("source", "unknown")
+        page = doc.metadata.get("page", -1) + 1
+        context_blocks.append(f"[{source}, page {page}]\n{doc.page_content}")
+        sources.append({
+            "source": source,
+            "page": page,
+            "relevance_score": round(1 - score, 4),
+        })
+
+    context = "\n\n---\n\n".join(context_blocks)
+    prompt = ANSWER_PROMPT.format(context=context, question=req.question)
+
+    try:
+        response = llm.invoke(prompt)
+    except Exception as e:
+        raise HTTPException(500, f"LLM call failed - check GROQ_API_KEY in .env. ({e})")
+
+    return {
+        "question": req.question,
+        "answer": response.content,
+        "sources": sources,
+    }
