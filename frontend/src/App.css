@@ -376,3 +376,45 @@ select {
   border-color: #d93025;
   color: #b3261e;
 }
+
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+
+.thread-turn {
+  padding-bottom: 16px;
+  border-bottom: 1px solid #eee;
+}
+
+.thread-turn:last-child {
+  border-bottom: none;
+}
+
+.thread-question {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.thread-interpreted {
+  font-style: italic;
+  margin: 0 0 8px;
+}
+
+.text-button {
+  background: none;
+  color: #6b6b6b;
+  border: none;
+  padding: 8px 0 0;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.text-button:disabled {
+  color: #c5c5c5;
+  cursor: not-allowed;
+}

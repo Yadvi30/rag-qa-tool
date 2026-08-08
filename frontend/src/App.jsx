@@ -45,9 +45,9 @@ function App() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false) // one request at a time, across all sections
 
-  // --- Ask ---
+  // --- Ask (conversation thread, per document) ---
   const [question, setQuestion] = useState('')
-  const [answer, setAnswer] = useState(null)
+  const [threads, setThreads] = useState({}) // { [docId]: [{question, answer, sources, standalone_question}] }
 
   // --- Summarize ---
   const [summary, setSummary] = useState(null)
@@ -86,25 +86,51 @@ function App() {
     }
   }
 
+  const currentThread = threads[activeDocId] || []
+
   const handleAsk = async () => {
     if (!question.trim() || !hasDoc) return
+    const askedQuestion = question
     setBusy(true)
     setError('')
-    setAnswer(null)
+    setQuestion('')
     try {
       const res = await fetch(`${API_BASE}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ doc_id: activeDocId, question: askedQuestion }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Request failed')
-      setAnswer(data)
+
+      setThreads((prev) => ({
+        ...prev,
+        [activeDocId]: [
+          ...(prev[activeDocId] || []),
+          {
+            question: askedQuestion,
+            answer: data.answer,
+            sources: data.sources,
+            standalone_question: data.standalone_question,
+          },
+        ],
+      }))
     } catch (err) {
       setError(err.message)
+      setQuestion(askedQuestion) // give it back so the user doesn't lose what they typed
     } finally {
       setBusy(false)
     }
+  }
+
+  const handleNewConversation = async () => {
+    if (!hasDoc) return
+    try {
+      await fetch(`${API_BASE}/conversation/${activeDocId}`, { method: 'DELETE' })
+    } catch {
+      // non-critical if this fails - clearing the local thread still resets the UI
+    }
+    setThreads((prev) => ({ ...prev, [activeDocId]: [] }))
   }
 
   const handleSummarize = async () => {
@@ -215,11 +241,38 @@ function App() {
       {/* --- Ask --- */}
       <section className="card">
         <h2>2. Ask a question</h2>
+
+        {currentThread.length > 0 && (
+          <div className="thread">
+            {currentThread.map((turn, i) => (
+              <div key={i} className="thread-turn">
+                <p className="thread-question">{turn.question}</p>
+                {turn.standalone_question && (
+                  <p className="meta thread-interpreted">
+                    Interpreted as: "{turn.standalone_question}"
+                  </p>
+                )}
+                <p className="answer-text">{turn.answer}</p>
+                <div className="sources">
+                  <p className="meta">Sources:</p>
+                  {turn.sources.map((s, i2) => (
+                    <span key={i2} className="source-chip">{s.source} · p.{s.page}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="row">
           <input
             type="text"
             value={question}
-            placeholder="e.g. How many days of leave do I get?"
+            placeholder={
+              currentThread.length > 0
+                ? 'Ask a follow-up...'
+                : 'e.g. How many days of leave do I get?'
+            }
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleAsk()}
             disabled={!hasDoc}
@@ -229,16 +282,10 @@ function App() {
           </button>
         </div>
 
-        {answer && (
-          <div className="inline-result">
-            <p className="answer-text">{answer.answer}</p>
-            <div className="sources">
-              <p className="meta">Sources:</p>
-              {answer.sources.map((s, i) => (
-                <span key={i} className="source-chip">{s.source} · p.{s.page}</span>
-              ))}
-            </div>
-          </div>
+        {currentThread.length > 0 && (
+          <button className="text-button" onClick={handleNewConversation} disabled={busy}>
+            New conversation
+          </button>
         )}
       </section>
 
@@ -304,7 +351,8 @@ function App() {
       <section className="card">
         <h2>5. Or just type what you want</h2>
         <p className="meta">
-          e.g. "give me 5 questions worth 2 marks and 5 worth 5 marks" 
+          e.g. "give me 5 questions worth 2 marks and 5 worth 5 marks" - handled
+          automatically, no button needed
         </p>
         <div className="row">
           <input
