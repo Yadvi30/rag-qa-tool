@@ -1,10 +1,13 @@
 """Single free-text entry point. Classifies what the user wants, then
-dispatches to the same engine functions the dedicated endpoints use - no
-logic is duplicated here, this file is purely routing."""
+dispatches to the same engine functions the dedicated endpoints use."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 import rag_engine as engine
+from auth import get_current_user
+from database import get_db
+from db_models import User
 from models import ChatRequest
 from prompts import FIVE_MARK_PROMPT, TWO_MARK_PROMPT
 
@@ -12,9 +15,12 @@ router = APIRouter(tags=["chat"])
 
 
 @router.post("/chat")
-def chat(req: ChatRequest):
-    # Confirms the document exists before spending a call on classification
-    text = engine.get_document_text(req.doc_id)
+def chat(
+    req: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    text = engine.get_document_text(req.doc_id, current_user.id, db)  # 404s if not owned
 
     intent_data = engine.classify_intent(req.message)
     intent = intent_data.intent
@@ -45,7 +51,7 @@ def chat(req: ChatRequest):
             }
 
         else:  # "qa"
-            result = engine.answer_question(req.message, req.doc_id)
+            result = engine.answer_question(req.message, req.doc_id, current_user.id, db)
             return {"intent": "qa", "question": req.message, **result}
 
     except HTTPException:

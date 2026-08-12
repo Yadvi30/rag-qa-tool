@@ -1,35 +1,39 @@
 """Question answering: /ask (grounded answer), /query (raw retrieval, for
-debugging), and conversation memory management."""
+debugging), and conversation history - all scoped to the logged-in user."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 import rag_engine as engine
-from models import QueryRequest
+from auth import get_current_user
+from database import get_db
+from db_models import ChatMessage, User
+from models import ChatHistoryTurn, QueryRequest
 
 router = APIRouter(tags=["qa"])
 
 
 @router.post("/query")
-def query_documents(req: QueryRequest):
+def query_documents(
+    req: QueryRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     Returns raw retrieved chunks instead of a generated answer - useful for
-    debugging retrieval quality independent of the LLM (e.g. "is the right
-    chunk even being found?" vs "is the LLM answering it well?").
+    debugging retrieval quality independent of the LLM.
     """
-    if not engine.uploaded_docs:
-        raise HTTPException(400, "Upload at least one document before querying.")
+    engine.get_owned_document(req.doc_id, current_user.id, db)  # 404s if not this user's
 
-    results = engine.vectorstore.similarity_search_with_score(req.question, k=req.top_k)
+    results = engine.vectorstore.similarity_search_with_score(
+        req.question, k=req.top_k, filter={"doc_id": req.doc_id}
+    )
 
     matches = [
         {
             "content": doc.page_content,
             "source": doc.metadata.get("source", "unknown"),
-            # pypdf counts pages from 0 - add 1 so citations match what a
-            # human sees when they open the PDF (page 1, not page 0).
             "page": doc.metadata.get("page", -1) + 1,
-            # With normalized embeddings + cosine space, this is a real
-            # similarity score in roughly [0, 1] - 1 = identical, 0 = unrelated.
             "relevance_score": round(1 - score, 4),
         }
         for doc, score in results
@@ -39,19 +43,46 @@ def query_documents(req: QueryRequest):
 
 
 @router.post("/ask")
-def ask_question(req: QueryRequest):
-    if not engine.uploaded_docs:
-        raise HTTPException(400, "Upload at least one document before asking questions.")
-    if req.doc_id not in engine.document_texts:
-        raise HTTPException(404, f"No document found with doc_id '{req.doc_id}'.")
-
-    result = engine.answer_question(req.question, req.doc_id, req.top_k)
+def ask_question(
+    req: QueryRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    result = engine.answer_question(req.question, req.doc_id, current_user.id, db, req.top_k)
     return {"question": req.question, **result}
 
 
+@router.get("/conversation/{doc_id}", response_model=list[ChatHistoryTurn])
+def get_conversation(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Returns this user's full persisted chat history for a document -
+    survives server restarts, unlike the old in-memory version."""
+    engine.get_owned_document(doc_id, current_user.id, db)  # 404s if not this user's
+
+    messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.doc_id == doc_id, ChatMessage.user_id == current_user.id)
+        .order_by(ChatMessage.created_at.asc())
+        .all()
+    )
+    return messages
+
+
 @router.delete("/conversation/{doc_id}")
-def clear_conversation(doc_id: str):
-    """Clears just this document's chat memory - lets the user start a fresh
-    conversation without resetting uploaded documents."""
-    engine.conversation_history.pop(doc_id, None)
+def clear_conversation(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Clears just this document's chat history - lets the user start a
+    fresh conversation without deleting the document itself."""
+    engine.get_owned_document(doc_id, current_user.id, db)  # 404s if not this user's
+
+    db.query(ChatMessage).filter(
+        ChatMessage.doc_id == doc_id, ChatMessage.user_id == current_user.id
+    ).delete()
+    db.commit()
     return {"status": "cleared", "doc_id": doc_id}

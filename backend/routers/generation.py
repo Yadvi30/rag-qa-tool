@@ -1,11 +1,13 @@
 """Whole-document generation: summarize, quiz (MCQ), and marks-weighted
-exam questions. None of these use vector retrieval - they read the full
-document text directly, since these tasks need broad coverage, not the
-top-k chunks most similar to some query."""
+exam questions - scoped to the logged-in user's own documents."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 import rag_engine as engine
+from auth import get_current_user
+from database import get_db
+from db_models import User
 from models import DocRequest, ExamRequest, QuizRequest
 from prompts import FIVE_MARK_PROMPT, TWO_MARK_PROMPT
 
@@ -13,8 +15,12 @@ router = APIRouter(tags=["generation"])
 
 
 @router.post("/summarize")
-def summarize_document(req: DocRequest):
-    text = engine.get_document_text(req.doc_id)
+def summarize_document(
+    req: DocRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    text = engine.get_document_text(req.doc_id, current_user.id, db)
     try:
         summary = engine.summarize_document_text(text)
     except Exception as e:
@@ -23,8 +29,12 @@ def summarize_document(req: DocRequest):
 
 
 @router.post("/quiz")
-def generate_quiz(req: QuizRequest):
-    text = engine.get_document_text(req.doc_id)
+def generate_quiz(
+    req: QuizRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    text = engine.get_document_text(req.doc_id, current_user.id, db)
     try:
         questions = engine.generate_quiz_items(text, req.count, req.difficulty)
     except Exception as e:
@@ -38,14 +48,12 @@ def generate_quiz(req: QuizRequest):
 
 
 @router.post("/exam-questions")
-def generate_exam_questions(req: ExamRequest):
-    """
-    Marks-weighted exam questions. Two separate generation passes over the
-    same document - one prompted for short 2-mark recall questions, one for
-    longer 5-mark explanatory questions - since these need genuinely
-    different question depth, not just a count difference.
-    """
-    text = engine.get_document_text(req.doc_id)
+def generate_exam_questions(
+    req: ExamRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    text = engine.get_document_text(req.doc_id, current_user.id, db)
     try:
         two_mark = engine.generate_items(text, TWO_MARK_PROMPT, req.two_mark_count)
         five_mark = engine.generate_items(text, FIVE_MARK_PROMPT, req.five_mark_count)

@@ -10,8 +10,10 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_groq import ChatGroq
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sqlalchemy.orm import Session
 
 from config import CHROMA_DIR, EMBEDDING_MODEL, GROQ_API_KEY, LLM_MODEL, MAX_HISTORY_TURNS
+from db_models import ChatMessage, Document
 from models import QuizQuestion, QuizQuestionSet, RouterIntent
 from prompts import (
     ANSWER_PROMPT,
@@ -70,40 +72,56 @@ llm = ChatGroq(model=LLM_MODEL, temperature=0, api_key=GROQ_API_KEY)
 quiz_llm = llm.with_structured_output(QuizQuestionSet)
 router_llm = llm.with_structured_output(RouterIntent)
 
-# --- In-memory state (swap for a real DB when auth is added) ---
 
-uploaded_docs: list[dict] = []
-document_texts: dict[str, str] = {}  # doc_id -> full extracted text
-conversation_history: dict[str, list[dict]] = {}  # doc_id -> [{"role", "content"}, ...]
+# --- Document access helpers (DB-backed, scoped to the requesting user) ---
 
-
-# --- Document access helpers ---
-
-def get_document_text(doc_id: str) -> str:
-    text = document_texts.get(doc_id)
-    if text is None:
+def get_owned_document(doc_id: str, user_id: int, db: Session) -> Document:
+    """
+    Fetches a document row, but ONLY if it belongs to this user. Returns 404
+    (not 403) whether the doc doesn't exist at all or belongs to someone
+    else - deliberately not revealing which, so a user can't probe for
+    other people's doc_ids.
+    """
+    doc = (
+        db.query(Document)
+        .filter(Document.doc_id == doc_id, Document.user_id == user_id)
+        .first()
+    )
+    if doc is None:
         raise HTTPException(404, f"No document found with doc_id '{doc_id}'.")
-    return text
+    return doc
+
+
+def get_document_text(doc_id: str, user_id: int, db: Session) -> str:
+    return get_owned_document(doc_id, user_id, db).full_text
 
 
 # --- Conversation memory / query reformulation ---
 
-def format_history(history: list[dict]) -> str:
-    lines = [f"{turn['role'].capitalize()}: {turn['content']}" for turn in history]
+def format_history(history: list[ChatMessage]) -> str:
+    lines = [f"{turn.role.capitalize()}: {turn.content}" for turn in history]
     return "\n".join(lines)
 
 
-def condense_question(question: str, history: list[dict]) -> str:
+def get_recent_history(doc_id: str, user_id: int, db: Session) -> list[ChatMessage]:
+    return (
+        db.query(ChatMessage)
+        .filter(ChatMessage.doc_id == doc_id, ChatMessage.user_id == user_id)
+        .order_by(ChatMessage.created_at.asc())
+        .all()[-(MAX_HISTORY_TURNS * 2):]
+    )
+
+
+def condense_question(question: str, history: list[ChatMessage]) -> str:
     if not history:
         return question
-    recent = history[-(MAX_HISTORY_TURNS * 2):]
-    prompt = CONDENSE_QUESTION_PROMPT.format(history=format_history(recent), question=question)
+    prompt = CONDENSE_QUESTION_PROMPT.format(history=format_history(history), question=question)
     return llm.invoke(prompt).content.strip()
 
 
 # --- QA (retrieval + grounded generation) ---
 
-def answer_question(question: str, doc_id: str, top_k: int = 4) -> dict:
+def answer_question(question: str, doc_id: str, user_id: int, db: Session, top_k: int = 4) -> dict:
     """
     Shared QA engine - retrieval + grounded generation. Used by both /ask
     directly and by /chat once the router decides the user wants a QA
@@ -111,12 +129,21 @@ def answer_question(question: str, doc_id: str, top_k: int = 4) -> dict:
 
     Conversation-aware: if there's prior history for this doc_id, the
     question is first reformulated into a standalone question (resolving
-    things like "what about for managers?") before retrieval runs.
+    things like "what about for managers?") before retrieval runs. History
+    and the resulting answer are persisted to the database, not held in memory.
     """
-    history = conversation_history.get(doc_id, [])
+    get_owned_document(doc_id, user_id, db)  # raises 404 if not this user's doc
+
+    history = get_recent_history(doc_id, user_id, db)
     standalone_question = condense_question(question, history)
 
-    results = vectorstore.similarity_search_with_score(standalone_question, k=top_k)
+    # Filtered to this doc_id specifically - without this, retrieval would
+    # search across every document ever uploaded by any user, which is both
+    # wrong (mixes unrelated documents into one answer) and a privacy issue
+    # once multiple users share the same vector store.
+    results = vectorstore.similarity_search_with_score(
+        standalone_question, k=top_k, filter={"doc_id": doc_id}
+    )
     if not results:
         raise HTTPException(400, "No relevant content found for this question.")
 
@@ -142,11 +169,12 @@ def answer_question(question: str, doc_id: str, top_k: int = 4) -> dict:
 
     answer_text = response.content
 
-    # Store the ORIGINAL question (what the user actually typed), not the
-    # reformulated one - that's what a real conversation transcript should read like.
-    history.append({"role": "user", "content": question})
-    history.append({"role": "assistant", "content": answer_text})
-    conversation_history[doc_id] = history[-(MAX_HISTORY_TURNS * 2):]
+    # Persist both turns. Store the ORIGINAL question (what the user
+    # actually typed), not the reformulated one - that's what a real
+    # conversation transcript should read like.
+    db.add(ChatMessage(user_id=user_id, doc_id=doc_id, role="user", content=question))
+    db.add(ChatMessage(user_id=user_id, doc_id=doc_id, role="assistant", content=answer_text))
+    db.commit()
 
     return {
         "answer": answer_text,

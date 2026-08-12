@@ -5,9 +5,45 @@ route handlers and business logic makes the "shape" of the API easy to scan
 in one place.
 """
 
+from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+# --- Auth ---
+
+class UserCreate(BaseModel):
+    name: str
+    email: EmailStr
+    password: str = Field(min_length=8)
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserProfile(BaseModel):
+    model_config = ConfigDict(from_attributes=True)  # lets this read directly from an ORM object
+
+    public_id: str
+    name: str
+    email: str
+    created_at: datetime
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserProfile
+
+
+class ChatHistoryTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: datetime
+
 
 
 # --- Request bodies ---

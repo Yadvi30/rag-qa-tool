@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  /* Deep teal - navbar/footer chrome, constant regardless of light/dark page theme */
+  --color-teal-950: #03120f;
+  --color-teal-900: #08251e;
+  --color-teal-800: #103d32;
+  --color-teal-700: #1a5c4c;
+
+  /* Emerald - accent, buttons, highlights */
+  --color-emerald-950: #022c22;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-100: #d1fae5;
+
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Courier New', monospace;
+  --font-brand: 'Manrope', sans-serif;
+}
+
+/* Radial gradient page background, per the brief:
+   light: bright white center -> soft desaturated pale mint edge
+   dark:  lighter green-teal center -> near-black vignette edge
+   background-attachment: fixed keeps the vignette centered on the
+   viewport rather than repeating per scrolled element. */
+:root {
+  --bg-gradient: radial-gradient(circle at 50% 30%, #ffffff 0%, #eaf7f1 55%, #dcf0e6 100%);
+}
+
+[data-theme='dark'] {
+  --bg-gradient: radial-gradient(circle at 50% 30%, #123d33 0%, #0a2620 45%, #030807 100%);
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  color: #0a2620;
+  background: var(--bg-gradient);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+[data-theme='dark'] body {
+  color: #e7f8f2;
+}
