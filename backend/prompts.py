@@ -84,27 +84,46 @@ DIFFICULTY_DESCRIPTIONS = {
     "hard": "hard (requiring deeper reasoning, analysis, or synthesizing multiple parts of the text)",
 }
 
-TWO_MARK_PROMPT = """Based on the following text, generate exactly {n} short-answer exam \
-questions worth 2 marks each - each answerable in 1-2 sentences, testing recall of a \
-specific fact. Cover distinct facts spread across the text.
+# --- Mindmap ---
+
+MINDMAP_PROMPT = """Based on the following document, create a hierarchical mind map that \
+captures its main structure and key ideas.
+
+Rules:
+- The root node's title should be a short label for the whole document (a few words).
+- Include 3-6 main branches (top-level children) covering the major sections or themes.
+- Each main branch can have 2-5 sub-points if the content genuinely supports it - don't \
+force sub-points where there aren't real distinct ones.
+- Keep every node's title SHORT - a few words, never a full sentence.
+- Go at most 3 levels deep total (root -> branch -> sub-point). Do not go deeper.
+- Base this entirely on the actual content below - do not invent topics that aren't present.
+
+Document:
+{text}"""
+
+EXAM_PROMPT = """Based on the following text, generate exactly {n} exam questions worth \
+{marks} marks each. {depth_hint} Cover distinct topics spread across the text, not just \
+the beginning. Do not repeat questions.
 
 Format each one exactly like this:
 Q: <question>
-A: <short expected answer>
+A: <expected answer>
 
 Text:
 {text}"""
 
-FIVE_MARK_PROMPT = """Based on the following text, generate exactly {n} exam questions \
-worth 5 marks each - each requiring a detailed answer covering multiple points or \
-reasoning, not a one-line fact. Cover distinct topics spread across the text.
 
-Format each one exactly like this:
-Q: <question>
-A: <detailed expected answer, 3-5 sentences>
-
-Text:
-{text}"""
+def exam_depth_hint(marks: int) -> str:
+    """
+    Marks values are arbitrary (whatever the user asks for), so answer depth
+    is derived from the number rather than hardcoded to just '2' or '5'.
+    """
+    if marks <= 2:
+        return "Each question should be answerable in 1-2 sentences, testing recall of a specific fact."
+    elif marks <= 5:
+        return "Each question should require a moderately detailed answer covering a couple of related points."
+    else:
+        return "Each question should require a detailed, well-structured answer covering multiple points or reasoning."
 
 # --- Intent router ---
 # This is the piece that lets a user type anything - a question, "summarize
@@ -117,3 +136,16 @@ ROUTER_PROMPT = """Classify what the user wants to do with their document, and e
 any question counts they mentioned.
 
 User message: "{message}\""""
+
+# --- Mindmap ---
+# Structured output (see MindmapNode in models.py) guarantees a real tree
+# shape - no parsing a bulleted outline out of free text.
+
+MINDMAP_PROMPT = """Based on the following text, create a mind map. Identify the single \
+central topic, 4-6 main branches (the key themes or sections), and for each main branch, \
+2-4 sub-points (specific facts or details from the text). Keep every label short - a few \
+words, not a full sentence. The central topic itself is the root node; its direct \
+children are the main branches.
+
+Text:
+{text}"""

@@ -48,7 +48,9 @@ def ask_question(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    result = engine.answer_question(req.question, req.doc_id, current_user.id, db, req.top_k)
+    result = engine.answer_question(
+        req.question, req.doc_id, current_user.id, db, req.top_k, persist=req.persist
+    )
     return {"question": req.question, **result}
 
 

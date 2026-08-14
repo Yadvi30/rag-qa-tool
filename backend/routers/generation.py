@@ -9,7 +9,7 @@ from auth import get_current_user
 from database import get_db
 from db_models import User
 from models import DocRequest, ExamRequest, QuizRequest
-from prompts import FIVE_MARK_PROMPT, TWO_MARK_PROMPT
+from prompts import EXAM_PROMPT, exam_depth_hint
 
 router = APIRouter(tags=["generation"])
 
@@ -55,8 +55,12 @@ def generate_exam_questions(
 ):
     text = engine.get_document_text(req.doc_id, current_user.id, db)
     try:
-        two_mark = engine.generate_items(text, TWO_MARK_PROMPT, req.two_mark_count)
-        five_mark = engine.generate_items(text, FIVE_MARK_PROMPT, req.five_mark_count)
+        two_mark = engine.generate_items(
+            text, EXAM_PROMPT, req.two_mark_count, marks=2, depth_hint=exam_depth_hint(2)
+        )
+        five_mark = engine.generate_items(
+            text, EXAM_PROMPT, req.five_mark_count, marks=5, depth_hint=exam_depth_hint(5)
+        )
     except Exception as e:
         raise HTTPException(500, f"LLM call failed - check GROQ_API_KEY in .env. ({e})")
 
@@ -65,3 +69,17 @@ def generate_exam_questions(
         "two_mark_questions": two_mark,
         "five_mark_questions": five_mark,
     }
+
+
+@router.post("/mindmap")
+def generate_mindmap(
+    req: DocRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    text = engine.get_document_text(req.doc_id, current_user.id, db)
+    try:
+        mindmap = engine.generate_mindmap(text)
+    except Exception as e:
+        raise HTTPException(500, f"LLM call failed - check GROQ_API_KEY in .env. ({e})")
+    return {"doc_id": req.doc_id, "mindmap": mindmap.model_dump()}

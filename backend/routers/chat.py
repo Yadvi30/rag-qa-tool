@@ -8,8 +8,10 @@ import rag_engine as engine
 from auth import get_current_user
 from database import get_db
 from db_models import User
-from models import ChatRequest
-from prompts import FIVE_MARK_PROMPT, TWO_MARK_PROMPT
+from models import ChatRequest, ExamGroup
+from prompts import EXAM_PROMPT, exam_depth_hint
+
+
 
 router = APIRouter(tags=["chat"])
 
@@ -40,15 +42,23 @@ def chat(
             }
 
         elif intent == "exam":
-            two = intent_data.two_mark_count
-            five = intent_data.five_mark_count
-            two_mark = engine.generate_items(text, TWO_MARK_PROMPT, two)
-            five_mark = engine.generate_items(text, FIVE_MARK_PROMPT, five)
-            return {
-                "intent": intent,
-                "two_mark_questions": two_mark,
-                "five_mark_questions": five_mark,
-            }
+            # Whatever marks values the user actually asked for - not
+            # limited to a fixed 2-mark/5-mark pair.
+            groups = intent_data.exam_groups or [
+                ExamGroup(marks=2, count=5),
+                ExamGroup(marks=5, count=5),
+            ]
+            exam_results = [
+                {
+                    "marks": g.marks,
+                    "count": g.count,
+                    "questions": engine.generate_items(
+                        text, EXAM_PROMPT, g.count, marks=g.marks, depth_hint=exam_depth_hint(g.marks)
+                    ),
+                }
+                for g in groups
+            ]
+            return {"intent": intent, "exam_groups": exam_results}
 
         else:  # "qa"
             result = engine.answer_question(req.message, req.doc_id, current_user.id, db)

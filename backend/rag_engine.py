@@ -14,11 +14,12 @@ from sqlalchemy.orm import Session
 
 from config import CHROMA_DIR, EMBEDDING_MODEL, GROQ_API_KEY, LLM_MODEL, MAX_HISTORY_TURNS
 from db_models import ChatMessage, Document
-from models import QuizQuestion, QuizQuestionSet, RouterIntent
+from models import Mindmap, QuizQuestion, QuizQuestionSet, RouterIntent
 from prompts import (
     ANSWER_PROMPT,
     CONDENSE_QUESTION_PROMPT,
     DIFFICULTY_DESCRIPTIONS,
+    MINDMAP_PROMPT,
     QUIZ_MCQ_PROMPT,
     ROUTER_PROMPT,
     SUMMARY_PROMPT,
@@ -71,6 +72,7 @@ llm = ChatGroq(model=LLM_MODEL, temperature=0, api_key=GROQ_API_KEY)
 # free text and hand-parsing it.
 quiz_llm = llm.with_structured_output(QuizQuestionSet)
 router_llm = llm.with_structured_output(RouterIntent)
+mindmap_llm = llm.with_structured_output(Mindmap)
 
 
 # --- Document access helpers (DB-backed, scoped to the requesting user) ---
@@ -121,16 +123,19 @@ def condense_question(question: str, history: list[ChatMessage]) -> str:
 
 # --- QA (retrieval + grounded generation) ---
 
-def answer_question(question: str, doc_id: str, user_id: int, db: Session, top_k: int = 4) -> dict:
+def answer_question(
+    question: str, doc_id: str, user_id: int, db: Session, top_k: int = 4, persist: bool = True
+) -> dict:
     """
-    Shared QA engine - retrieval + grounded generation. Used by both /ask
-    directly and by /chat once the router decides the user wants a QA
-    answer rather than a summary/quiz/exam.
+    Shared QA engine - retrieval + grounded generation. Used by /ask, by
+    /chat's qa branch, and by mindmap "ask about this node" clicks.
 
     Conversation-aware: if there's prior history for this doc_id, the
     question is first reformulated into a standalone question (resolving
-    things like "what about for managers?") before retrieval runs. History
-    and the resulting answer are persisted to the database, not held in memory.
+    things like "what about for managers?") before retrieval runs.
+
+    persist=False skips writing to chat_history - used for mindmap node
+    clicks, which shouldn't clutter the Ask tab's saved conversation.
     """
     get_owned_document(doc_id, user_id, db)  # raises 404 if not this user's doc
 
@@ -169,12 +174,13 @@ def answer_question(question: str, doc_id: str, user_id: int, db: Session, top_k
 
     answer_text = response.content
 
-    # Persist both turns. Store the ORIGINAL question (what the user
-    # actually typed), not the reformulated one - that's what a real
-    # conversation transcript should read like.
-    db.add(ChatMessage(user_id=user_id, doc_id=doc_id, role="user", content=question))
-    db.add(ChatMessage(user_id=user_id, doc_id=doc_id, role="assistant", content=answer_text))
-    db.commit()
+    if persist:
+        # Store the ORIGINAL question (what the user actually typed), not
+        # the reformulated one - that's what a real conversation transcript
+        # should read like.
+        db.add(ChatMessage(user_id=user_id, doc_id=doc_id, role="user", content=question))
+        db.add(ChatMessage(user_id=user_id, doc_id=doc_id, role="assistant", content=answer_text))
+        db.commit()
 
     return {
         "answer": answer_text,
@@ -250,3 +256,15 @@ def generate_quiz_items(full_text: str, total: int, difficulty: str) -> list[Qui
 
 def classify_intent(message: str) -> RouterIntent:
     return router_llm.invoke(ROUTER_PROMPT.format(message=message))
+
+
+def generate_mindmap(full_text: str) -> Mindmap:
+    """
+    For short documents, generate directly from the full text. For long
+    documents, generate from a summary instead - reuses the existing
+    map-reduce summarization rather than building a second, separate
+    long-document strategy just for this one feature.
+    """
+    chunks = generation_splitter.split_text(full_text)
+    source_text = full_text if len(chunks) == 1 else summarize_document_text(full_text)
+    return mindmap_llm.invoke(MINDMAP_PROMPT.format(text=source_text))

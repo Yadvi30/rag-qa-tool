@@ -1,6 +1,7 @@
 function Footer() {
   return (
     <footer className="relative bg-teal-900 pt-10 pb-6 mt-14 overflow-hidden">
+      <div className="absolute top-0 left-0 h-px w-full bg-gradient-to-r from-transparent via-emerald-400/50 to-transparent" />
       {/* Watermark - large, faint, behind the content row */}
       <p
         className="pointer-events-none select-none absolute inset-x-0 -top-2 text-center font-extrabold text-white/5 leading-none"

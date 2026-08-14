@@ -24,7 +24,7 @@ function Navbar() {
   const goToAppOrSignup = () => navigate(isAuthenticated ? '/dashboard' : '/register')
 
   return (
-    <header className="bg-teal-900 sticky top-0 z-20">
+    <header className="bg-teal-900 sticky top-0 z-20 relative">
       <div className="max-w-[1080px] mx-auto px-6 h-[68px] flex items-center justify-between gap-6">
         <Link to="/" className="flex items-center gap-2.5 font-display text-lg font-semibold text-white shrink-0">
           <Logo />
@@ -33,7 +33,7 @@ function Navbar() {
           </span>
         </Link>
 
-        <nav className="hidden md:flex gap-6 flex-1">
+        <nav className="hidden md:flex gap-8 flex-1 justify-center">
           <NavLink to="/" end className={navLinkClass}>Home</NavLink>
           {onDashboard ? (
             <NavLink to="/dashboard" className={navLinkClass}>Dashboard</NavLink>
@@ -96,6 +96,7 @@ function Navbar() {
           )}
         </div>
       </div>
+      <div className="h-px w-full bg-gradient-to-r from-transparent via-emerald-400/50 to-transparent" />
     </header>
   )
 }

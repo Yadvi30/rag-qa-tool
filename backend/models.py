@@ -73,6 +73,7 @@ class QueryRequest(BaseModel):
     doc_id: str
     question: str
     top_k: int = 4
+    persist: bool = True  # False for calls that shouldn't show up in the Ask tab's saved history
 
 
 # --- Structured LLM output schemas ---
@@ -92,14 +93,47 @@ class QuizQuestionSet(BaseModel):
     questions: list[QuizQuestion]
 
 
+# --- Mindmap ---
+# Fixed 3-level structure (document -> branches -> sub-points), NOT
+# self-referencing. Groq's (and most providers') structured output doesn't
+# reliably support recursive/self-referencing schemas - a node containing a
+# list of itself - so this uses three distinct classes instead. This also
+# matches the "at most 3 levels deep" rule we always wanted, just enforced
+# by the schema itself now instead of hoping the model follows a prompt
+# instruction.
+
+class MindmapLeaf(BaseModel):
+    title: str = Field(description="Short label for this sub-point - a few words, not a sentence.")
+
+
+class MindmapBranch(BaseModel):
+    title: str = Field(description="Short label for this branch - a few words, not a sentence.")
+    children: list[MindmapLeaf] = Field(
+        default_factory=list,
+        description="2-5 sub-points under this branch, if the content genuinely supports them. Empty list if none.",
+    )
+
+
+class Mindmap(BaseModel):
+    title: str = Field(description="Short label for the whole document - a few words.")
+    children: list[MindmapBranch] = Field(
+        description="3-6 main branches covering the document's major sections or themes."
+    )
+
+
+class ExamGroup(BaseModel):
+    marks: int = Field(description="Marks value for this group of questions, e.g. 1, 2, 5, 10 - whatever the user said.")
+    count: int = Field(description="How many questions the user wants at this marks value.")
+
+
 class RouterIntent(BaseModel):
     intent: Literal["qa", "summarize", "quiz", "exam"] = Field(
         description=(
             "'qa' if the user is asking a specific question about the document. "
             "'summarize' if they want an overview/summary. "
             "'quiz' if they want quiz questions with answers generated. "
-            "'exam' if they want exam-style questions split by marks "
-            "(mentions '2 mark' / '5 mark' / 'marks' explicitly)."
+            "'exam' if they want exam-style questions split by marks - any marks "
+            "value, not just 2 or 5 (e.g. '5 questions for 1 mark' is valid)."
         )
     )
     quiz_count: int = Field(
@@ -107,13 +141,14 @@ class RouterIntent(BaseModel):
         description="Number of quiz questions requested, if intent is 'quiz'. "
         "Use the number the user mentioned, else 10.",
     )
-    two_mark_count: int = Field(
-        default=5,
-        description="Number of 2-mark questions requested, if intent is 'exam'. "
-        "Use the number the user mentioned, else 5.",
-    )
-    five_mark_count: int = Field(
-        default=5,
-        description="Number of 5-mark questions requested, if intent is 'exam'. "
-        "Use the number the user mentioned, else 5.",
+    exam_groups: list[ExamGroup] = Field(
+        default_factory=list,
+        description=(
+            "For 'exam' intent only: one entry per distinct marks value the user "
+            "mentioned, with however many questions they asked for at that value. "
+            "E.g. '5 questions for 1 mark' -> [{marks:1, count:5}]. "
+            "'5 for 2 marks and 3 for 10 marks' -> [{marks:2,count:5},{marks:10,count:3}]. "
+            "If they said 'exam questions' with no specifics at all, default to "
+            "[{marks:2,count:5},{marks:5,count:5}]."
+        ),
     )
